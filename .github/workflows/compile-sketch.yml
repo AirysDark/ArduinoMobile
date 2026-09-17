@@ -1,0 +1,64 @@
+name: Compile Arduino Sketch
+run-name: Arduino compile ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique request ID from the Android app
+        required: true
+        type: string
+      fqbn:
+        description: Arduino fully qualified board name
+        required: true
+        type: string
+      sketch_b64:
+        description: Base64 encoded .ino source
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+        with:
+          version: 1.5.1
+
+      - name: Prepare sketch
+        env:
+          SKETCH_B64: ${{ inputs.sketch_b64 }}
+        run: |
+          mkdir -p sketch output
+          printf '%s' "$SKETCH_B64" | base64 --decode > sketch/sketch.ino
+
+      - name: Install board core
+        env:
+          FQBN: ${{ inputs.fqbn }}
+        run: |
+          CORE="$(printf '%s' "$FQBN" | cut -d: -f1,2)"
+          arduino-cli config init --overwrite
+          arduino-cli core update-index
+          arduino-cli core install "$CORE"
+
+      - name: Compile sketch
+        env:
+          FQBN: ${{ inputs.fqbn }}
+        run: arduino-cli compile --fqbn "$FQBN" --output-dir output sketch
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ inputs.request_id }}
+          path: |
+            output/*.hex
+            output/*.bin
+          if-no-files-found: error
+          retention-days: 1
