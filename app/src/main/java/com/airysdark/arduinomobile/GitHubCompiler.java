@@ -44,7 +44,7 @@ final class GitHubCompiler {
                 body.put("inputs", inputs);
 
                 request("POST", API + "/actions/workflows/compile-sketch.yml/dispatches", token,
-                        body.toString().getBytes(StandardCharsets.UTF_8), false);
+                        body.toString().getBytes(StandardCharsets.UTF_8));
 
                 long runId = waitForRun(requestId, token, callback);
                 waitForCompletion(runId, token, callback);
@@ -61,7 +61,7 @@ final class GitHubCompiler {
         for (int i = 0; i < 40; i++) {
             JSONObject root = new JSONObject(new String(request("GET",
                     API + "/actions/workflows/compile-sketch.yml/runs?event=workflow_dispatch&per_page=20",
-                    token, null, false), StandardCharsets.UTF_8));
+                    token, null), StandardCharsets.UTF_8));
             JSONArray runs = root.getJSONArray("workflow_runs");
             for (int j = 0; j < runs.length(); j++) {
                 JSONObject run = runs.getJSONObject(j);
@@ -79,7 +79,7 @@ final class GitHubCompiler {
     private static void waitForCompletion(long runId, String token, Callback callback) throws Exception {
         for (int i = 0; i < 120; i++) {
             JSONObject run = new JSONObject(new String(request("GET", API + "/actions/runs/" + runId,
-                    token, null, false), StandardCharsets.UTF_8));
+                    token, null), StandardCharsets.UTF_8));
             String status = run.optString("status");
             String conclusion = run.optString("conclusion");
             callback.onStatus("Compile status: " + status + (conclusion.isEmpty() ? "" : " / " + conclusion));
@@ -96,35 +96,40 @@ final class GitHubCompiler {
 
     private static byte[] downloadArtifact(long runId, String requestId, String token, Callback callback) throws Exception {
         JSONObject root = new JSONObject(new String(request("GET", API + "/actions/runs/" + runId + "/artifacts",
-                token, null, false), StandardCharsets.UTF_8));
+                token, null), StandardCharsets.UTF_8));
         JSONArray artifacts = root.getJSONArray("artifacts");
         for (int i = 0; i < artifacts.length(); i++) {
             JSONObject artifact = artifacts.getJSONObject(i);
             if (("firmware-" + requestId).equals(artifact.getString("name"))) {
                 callback.onStatus("Downloading compiled firmware...");
-                return request("GET", artifact.getString("archive_download_url"), token, null, true);
+                return request("GET", artifact.getString("archive_download_url"), token, null);
             }
         }
         throw new IllegalStateException("Compiled firmware artifact was not found.");
     }
 
     private static String extractHex(byte[] zipBytes) throws Exception {
+        String fallback = null;
         try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
             ZipEntry entry;
             while ((entry = zin.getNextEntry()) != null) {
-                if (!entry.isDirectory() && entry.getName().toLowerCase().endsWith(".hex")) {
+                String name = entry.getName().toLowerCase();
+                if (!entry.isDirectory() && name.endsWith(".hex")) {
                     ByteArrayOutputStream out = new ByteArrayOutputStream();
                     byte[] buffer = new byte[8192];
                     int count;
                     while ((count = zin.read(buffer)) != -1) out.write(buffer, 0, count);
-                    return out.toString(StandardCharsets.UTF_8.name());
+                    String text = out.toString(StandardCharsets.UTF_8.name());
+                    if (!name.contains("with_bootloader")) return text;
+                    fallback = text;
                 }
             }
         }
+        if (fallback != null) return fallback;
         throw new IllegalStateException("The build artifact did not contain a .hex firmware file.");
     }
 
-    private static byte[] request(String method, String urlString, String token, byte[] body, boolean binary) throws Exception {
+    private static byte[] request(String method, String urlString, String token, byte[] body) throws Exception {
         URL url = new URL(urlString);
         for (int redirects = 0; redirects < 6; redirects++) {
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
@@ -135,7 +140,7 @@ final class GitHubCompiler {
             connection.setRequestProperty("Accept", "application/vnd.github+json");
             connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
             connection.setRequestProperty("User-Agent", "ArduinoMobile/0.1");
-            if (token != null && !token.trim().isEmpty()) {
+            if ("api.github.com".equalsIgnoreCase(url.getHost()) && token != null && !token.trim().isEmpty()) {
                 connection.setRequestProperty("Authorization", "Bearer " + token.trim());
             }
             if (body != null) {
